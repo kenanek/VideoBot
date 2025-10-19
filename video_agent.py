@@ -1,95 +1,80 @@
 import os
-import requests
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-import gtts
-from moviepy.editor import ImageClip, concatenate_videoclips, TextClip, CompositeVideoClip
 import random
-from datetime import datetime
 import schedule
 import time
+from moviepy.editor import ImageClip, concatenate_videoclips, TextClip, CompositeVideoClip
+from gtts import gTTS
+from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
+import requests
 
-# Config
-YOUTUBE_CLIENT_SECRETS = "client_secrets.json"
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "your_pexels_api_key_here")
-VIDEO_TOPIC = os.getenv("VIDEO_TOPIC", "Moroccan culture tips")
+# إعدادات
 OUTPUT_DIR = "output_videos"
+if not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR)
 
-# Generate Script
-def generate_script(topic):
-    prompt = f"Write a 50-word script for a 30-second video about {topic} in Darija."
-    script = "Salam! Bghiti t3lm 3la l-Maghrib? 1. Zour Chefchaouen. 2. Jrrb tagine. 3. Sma3 gnawa. 4. Tkalem darija. 5. Chuf souks! Abda l-mgharba w t3lm bzzaf!"
-    return script
+# إعداد YouTube بـ service account
+credentials = Credentials.from_service_account_file('service_account.json', scopes=['https://www.googleapis.com/auth/youtube.upload'])
+youtube = build('youtube', 'v3', credentials=credentials)
 
-# Fetch Images
-def fetch_images(query, api_key):
-    url = f"https://api.pexels.com/v1/search?query={query}&per_page=5"
-    headers = {"Authorization": api_key}
-    response = requests.get(url, headers=headers).json()
-    images = [photo["src"]["medium"] for photo in response["photos"]]
-    for i, img_url in enumerate(images):
-        img_data = requests.get(img_url).content
-        with open(f"temp_image_{i}.jpg", "wb") as f:
-            f.write(img_data)
-    return [f"temp_image_{i}.jpg" for i in range(len(images))]
+# مفتاح Pexels (من env variable)
+PEXELS_API_KEY = os.getenv('PEXELS_API_KEY', 'YOUR_DEFAULT_KEY')  # بدل بـ secrets
+VIDEO_TOPIC = os.getenv('VIDEO_TOPIC', 'دروس الدارجة')
 
-# Generate Voiceover
-def generate_voiceover(text):
-    tts = gtts.gTTS(text, lang="ar")
-    tts.save("voiceover.mp3")
-    return "voiceover.mp3"
+# جلب صور من Pexels
+def get_pexels_images():
+    url = f"https://api.pexels.com/v1/search?query={VIDEO_TOPIC}&per_page=5"
+    headers = {"Authorization": PEXELS_API_KEY}
+    response = requests.get(url, headers=headers)
+    data = response.json()
+    return [photo['src']['large'] for photo in data['photos']]
 
-# Create Video
-def create_video(images, script, voiceover):
-    clips = []
-    duration_per_image = 6
-    for img in images:
-        clip = ImageClip(img).set_duration(duration_per_image)
-        clips.append(clip)
-    
-    text_lines = script.split(".")[:3]
-    for i, text in enumerate(text_lines):
-        if text.strip():
-            txt_clip = TextClip(text.strip(), fontsize=50, color="white", bg_color="black", size=(720, 1280))
-            txt_clip = txt_clip.set_duration(duration_per_image).set_position(("center", "bottom"))
-            clips[i] = CompositeVideoClip([clips[i], txt_clip])
-    
-    final_clip = concatenate_videoclips(clips, method="compose")
-    final_clip = final_clip.set_audio(AudioFileClip(voiceover))
-    
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_path = f"{OUTPUT_DIR}/video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    final_clip.write_videofile(output_path, fps=24, codec="libx264")
+# توليد فيديو
+def generate_video():
+    images = get_pexels_images()
+    clips = [ImageClip(img).set_duration(5) for img in images[:3]]
+    video = concatenate_videoclips(clips, method="compose")
+
+    # نص وصوت
+    text = TextClip("دروس يومية بالدارجة", fontsize=70, color='white', bg_color='black')
+    text = text.set_duration(5).set_position('bottom')
+    video = CompositeVideoClip([video, text])
+
+    # صوت
+    tts = gTTS(text="مرحبا، هاد درس يومي بالدارجة!", lang='ar')
+    tts.save("temp_audio.mp3")
+    video = video.set_audio("temp_audio.mp3")
+
+    # حفظ الفيديو
+    output_path = os.path.join(OUTPUT_DIR, f"video_{int(time.time())}.mp4")
+    video.write_videofile(output_path, fps=24)
+
     return output_path
 
-# Upload to YouTube
-def upload_to_youtube(video_path, title, description):
-    flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS, scopes=["https://www.googleapis.com/auth/youtube.upload"])
-    credentials = flow.run_local_server(port=0)
-    youtube = build("youtube", "v3", credentials=credentials)
-    
+# رفع الفيديو ليوتيوب
+def upload_to_youtube(video_path):
     body = {
-        "snippet": {"title": title, "description": description, "tags": ["Morocco", "Darija", "Shorts"], "categoryId": "22"},
-        "status": {"privacyStatus": "public"}
+        'snippet': {'title': f'{VIDEO_TOPIC} - {time.strftime("%Y-%m-%d")}', 'description': 'فيديو يومي', 'tags': [VIDEO_TOPIC], 'categoryId': '22'},
+        'status': {'privacyStatus': 'public'}
     }
-    media = MediaFileUpload(video_path)
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-    response = request.execute()
-    return response["id"]
+    with open(video_path, 'rb') as video_file:
+        request = youtube.videos().insert(
+            part='snippet,status',
+            body=body,
+            media_body=video_file
+        )
+        response = request.execute()
+    return response['id']
 
-# Schedule Job
+# الدالة الرئيسية
 def job():
-    script = generate_script(VIDEO_TOPIC)
-    images = fetch_images(VIDEO_TOPIC.split()[0].lower(), PEXELS_API_KEY)
-    voiceover = generate_voiceover(script)
-    video_path = create_video(images, script, voiceover)
-    video_id = upload_to_youtube(video_path, f"{VIDEO_TOPIC} - {datetime.now().strftime('%Y-%m-%d')}", script)
-    print(f"Uploaded: https://youtu.be/{video_id}")
+    video_path = generate_video()
+    video_id = upload_to_youtube(video_path)
+    print(f"Video uploaded: https://youtu.be/{video_id}")
 
+# تشغيل كل يوم 9 صباحا (يمكن تعديلها)
 schedule.every().day.at("09:00").do(job)
 
-if __name__ == "__main__":
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+while True:
+    schedule.run_pending()
+    time.sleep(60)
