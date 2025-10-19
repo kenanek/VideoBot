@@ -4,3 +4,4 @@ google-api-python-client
 moviepy
 gtts
 schedule
+imageio-ffmpeg
