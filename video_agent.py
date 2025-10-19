@@ -18,7 +18,7 @@ credentials = Credentials.from_service_account_file('service_account.json', scop
 youtube = build('youtube', 'v3', credentials=credentials)
 
 # مفتاح Pexels (من env variable)
-PEXELS_API_KEY = os.getenv('PEXELS_API_KEY', 'YOUR_DEFAULT_KEY')  # بدل بـ secrets
+PEXELS_API_KEY = os.getenv('PEXELS_API_KEY', 'FKrRHUWiVcBMlOI9foLPdDUYUl1q3jk72qIHjBWZsiPsMrq5AnXtkxq6')  # بدل بـ secrets
 VIDEO_TOPIC = os.getenv('VIDEO_TOPIC', 'دروس الدارجة')
 
 # جلب صور من Pexels
@@ -78,3 +78,4 @@ schedule.every().day.at("09:00").do(job)
 while True:
     schedule.run_pending()
     time.sleep(60)
+
